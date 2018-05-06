@@ -11,28 +11,21 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-package main
+package varcheck
 
 import (
 	"flag"
-	"fmt"
 	"go/ast"
-	"go/build"
 	"go/token"
-	"log"
-	"os"
-	"sort"
 	"strings"
 
 	"go/types"
 
-	"github.com/kisielk/gotool"
 	"golang.org/x/tools/go/loader"
 )
 
 var (
-	reportExported = flag.Bool("e", false, "Report exported variables and constants")
-	buildTags      = flag.String("tags", "", "Build tags")
+	buildTags = flag.String("varcheck.tags", "", "Build tags")
 )
 
 type object struct {
@@ -129,34 +122,13 @@ func (v *visitor) Visit(node ast.Node) ast.Visitor {
 	return v
 }
 
-func main() {
-	flag.Parse()
-	exitStatus := 0
-	importPaths := gotool.ImportPaths(flag.Args())
-	if len(importPaths) == 0 {
-		importPaths = []string{"."}
-	}
+type Issue struct {
+	Pos     token.Position
+	VarName string
+}
 
-	ctx := build.Default
-	if *buildTags != "" {
-		ctx.BuildTags = strings.Fields(*buildTags)
-	}
-	loadcfg := loader.Config{
-		Build: &ctx,
-	}
-	rest, err := loadcfg.FromArgs(importPaths, true)
-	if err != nil {
-		log.Fatalf("could not parse arguments: %s", err)
-	}
-	if len(rest) > 0 {
-		log.Fatalf("unhandled extra arguments: %v", rest)
-	}
-
-	program, err := loadcfg.Load()
-	if err != nil {
-		log.Fatalf("could not type check: %s", err)
-	}
-
+func Run(program *loader.Program, reportExported bool) []Issue {
+	var issues []Issue
 	uses := make(map[object]int)
 	positions := make(map[object]token.Position)
 
@@ -177,20 +149,15 @@ func main() {
 		}
 	}
 
-	var lines []string
-
 	for obj, useCount := range uses {
-		if useCount == 0 && (*reportExported || !ast.IsExported(obj.name)) {
+		if useCount == 0 && (reportExported || !ast.IsExported(obj.name)) {
 			pos := positions[obj]
-			lines = append(lines, fmt.Sprintf("%s: %s:%d:%d: %s", obj.pkgPath, pos.Filename, pos.Line, pos.Column, obj.name))
-			exitStatus = 1
+			issues = append(issues, Issue{
+				Pos:     pos,
+				VarName: obj.name,
+			})
 		}
 	}
 
-	sort.Strings(lines)
-	for _, line := range lines {
-		fmt.Println(line)
-	}
-
-	os.Exit(exitStatus)
+	return issues
 }

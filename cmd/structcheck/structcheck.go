@@ -12,26 +12,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-package main
+package structcheck
 
 import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/build"
+	"go/token"
 	"go/types"
-	"os"
-	"strings"
 
-	"github.com/kisielk/gotool"
 	"golang.org/x/tools/go/loader"
 )
 
 var (
-	assignmentsOnly = flag.Bool("a", false, "Count assignments only")
-	loadTestFiles   = flag.Bool("t", false, "Load test files too")
-	reportExported  = flag.Bool("e", false, "Report exported fields")
-	buildTags       = flag.String("tags", "", "Build tags")
+	assignmentsOnly = flag.Bool("structcheck.a", false, "Count assignments only")
+	loadTestFiles   = flag.Bool("structcheck.t", false, "Load test files too")
+	buildTags       = flag.String("structcheck.tags", "", "Build tags")
 )
 
 type visitor struct {
@@ -144,36 +140,14 @@ func (v *visitor) Visit(node ast.Node) ast.Visitor {
 	return v
 }
 
-func main() {
-	flag.Parse()
-	exitStatus := 0
-	importPaths := gotool.ImportPaths(flag.Args())
-	if len(importPaths) == 0 {
-		importPaths = []string{"."}
-	}
-	ctx := build.Default
-	if *buildTags != "" {
-		ctx.BuildTags = strings.Split(*buildTags, ",")
-	}
-	loadcfg := loader.Config{
-		Build: &ctx,
-	}
-	rest, err := loadcfg.FromArgs(importPaths, *loadTestFiles)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "could not parse arguments: %s", err)
-		os.Exit(1)
-	}
-	if len(rest) > 0 {
-		fmt.Fprintf(os.Stderr, "unhandled extra arguments: %v", rest)
-		os.Exit(1)
-	}
+type Issue struct {
+	Pos       token.Position
+	Type      string
+	FieldName string
+}
 
-	program, err := loadcfg.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "could not type check: %s", err)
-		os.Exit(1)
-	}
-
+func Run(program *loader.Program, reportExported bool) []Issue {
+	var issues []Issue
 	for _, pkg := range program.InitialPackages() {
 		visitor := &visitor{
 			m:    make(map[types.Type]map[string]int),
@@ -190,14 +164,13 @@ func main() {
 				continue
 			}
 			for fieldName, v := range visitor.m[t] {
-				if !*reportExported && ast.IsExported(fieldName) {
+				if !reportExported && ast.IsExported(fieldName) {
 					continue
 				}
 				if v == 0 {
 					field, _, _ := types.LookupFieldOrMethod(t, false, pkg.Pkg, fieldName)
 					if field == nil {
 						fmt.Printf("%s: unknown field or method: %s.%s\n", pkg.Pkg.Path(), t, fieldName)
-						exitStatus = 1
 						continue
 					}
 					if fieldName == "XMLName" {
@@ -206,14 +179,15 @@ func main() {
 						}
 					}
 					pos := program.Fset.Position(field.Pos())
-					fmt.Printf("%s: %s:%d:%d: %s.%s\n",
-						pkg.Pkg.Path(), pos.Filename, pos.Line, pos.Column,
-						types.TypeString(t, nil), fieldName,
-					)
-					exitStatus = 1
+					issues = append(issues, Issue{
+						Pos:       pos,
+						Type:      types.TypeString(t, nil),
+						FieldName: fieldName,
+					})
 				}
 			}
 		}
 	}
-	os.Exit(exitStatus)
+
+	return issues
 }
