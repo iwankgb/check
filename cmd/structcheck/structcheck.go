@@ -66,6 +66,18 @@ func (v *visitor) typeSpec(node *ast.TypeSpec) {
 				v.decl(t, fieldName)
 			}
 		}
+	} else if ident, ok := node.Type.(*ast.Ident); ok {
+		if spec, ok := ident.Obj.Decl.(*ast.TypeSpec); ok {
+			if strukt, ok := spec.Type.(*ast.StructType); ok {
+				t := v.pkg.Info.Defs[node.Name].Type()
+				for _, f := range strukt.Fields.List {
+					if len(f.Names) > 0 {
+						fieldName := f.Names[0].Name
+						v.decl(t, fieldName)
+					}
+				}
+			}
+		}
 	}
 }
 
